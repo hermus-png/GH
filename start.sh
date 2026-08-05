@@ -19,20 +19,21 @@ send_telegram "Kali Web starting... tunnel URL will be posted soon."
 # --- install packages (Ubuntu) ---
 export DEBIAN_FRONTEND=noninteractive
 echo "[*] apt update"
-apt-get update -yq >/dev/null 2>&1
+sudo apt-get update -yq >/dev/null 2>&1 || sudo apt-get update -yq
 echo "[*] apt install desktop + VNC + noVNC + cloudflared"
-apt-get install -yq --no-install-recommends \
+sudo apt-get install -yq --no-install-recommends \
   xvfb x11vnc xfce4 xfce4-terminal firefox \
   novnc websockify curl wget net-tools >/dev/null 2>&1 || \
-apt-get install -yq --no-install-recommends \
+sudo apt-get install -yq --no-install-recommends \
   xvfb x11vnc xfce4 xfce4-terminal novnc websockify curl wget net-tools >/dev/null 2>&1
 
 # cloudflared (latest) — GitHub is generally reachable
 if ! command -v cloudflared >/dev/null 2>&1; then
   echo "[*] Installing cloudflared"
   curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-    -o /usr/local/bin/cloudflared
-  chmod +x /usr/local/bin/cloudflared
+    -o /tmp/cloudflared
+  chmod +x /tmp/cloudflared
+  sudo mv /tmp/cloudflared /usr/local/bin/cloudflared
 fi
 
 # --- Start X display + desktop ---
