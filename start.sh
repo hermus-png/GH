@@ -1,10 +1,9 @@
 #!/bin/bash
-# Kali Web v4 — COMPLETELY self-owned stack: Xvfb + XFCE + x11vnc (no password)
-# on port 5901, websockify (noVNC) on 6080, Cloudflare quick tunnel to 6080.
-# Does not depend on the image's VNC/display/auth at all.
+# Kali Web v5 — install EVERYTHING we need (the image lacks Xvfb/x11vnc/XFCE):
+#   xvfb + x11vnc + xfce4 via apt, then own stack on :1 -> 5901 -> websockify 6080 -> tunnel
 set -e
 
-echo "[*] Kali Web v4 setup (container)"
+echo "[*] Kali Web v5 setup (container)"
 
 TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 CHAT="${TELEGRAM_CHAT_ID:-}"
@@ -14,7 +13,7 @@ send_telegram() {
     --data-urlencode "chat_id=${CHAT}" \
     --data-urlencode "text=$1" >/dev/null 2>&1 || true
 }
-send_telegram "Kali Web v4 starting (self-owned stack)..."
+send_telegram "Kali Web v5 starting (full apt install)..."
 
 # --- cloudflared ---
 if ! command -v cloudflared >/dev/null 2>&1; then
@@ -24,7 +23,7 @@ if ! command -v cloudflared >/dev/null 2>&1; then
   mv /tmp/cf /usr/local/bin/cloudflared
 fi
 
-# --- kill any old vnc/novnc/xvfb to free ports ---
+# --- kill old vnc/novnc processes (free ports) ---
 echo "[*] cleaning old processes"
 pkill -f x11vnc 2>/dev/null || true
 pkill -f Xvfb 2>/dev/null || true
@@ -33,36 +32,42 @@ pkill -f tightvncserver 2>/dev/null || true
 pkill -f Xvnc 2>/dev/null || true
 sleep 2
 
+# --- INSTALL missing tools (the image lacks them) ---
+export DEBIAN_FRONTEND=noninteractive
+echo "[*] apt update"
+apt-get update -yq >/dev/null 2>&1 || apt-get update -yq
+
+echo "[*] installing xvfb x11vnc xfce4 (this can take a few minutes)"
+apt-get install -yq --no-install-recommends \
+  xvfb x11vnc xfce4 xfce4-terminal dbus-x11 \
+  >/tmp/apt.log 2>&1 || apt-get install -yq --no-install-recommends \
+  xvfb x11vnc xfce4 xfce4-terminal \
+  >/tmp/apt.log 2>&1 || { echo "[!] apt install failed"; tail -15 /tmp/apt.log; }
+
+# verify tools exist
+for t in Xvfb x11vnc websockify startxfce4; do
+  if ! command -v "$t" >/dev/null 2>&1; then
+    echo "[!] $t NOT available"
+  else
+    echo "[*] $t OK"
+  fi
+done
+
 # --- our own X server on :1 ---
 export DISPLAY=:1
 echo "[*] starting Xvfb on :1 (1600x1000x24)"
 Xvfb :1 -screen 0 1600x1000x24 -nolisten tcp &>/tmp/xvfb.log &
 sleep 4
-[ -S /tmp/.X11-unix/X1 ] && echo "  Xvfb OK (socket exists)" || { echo "  !! Xvfb failed"; cat /tmp/xvfb.log | tail -5; }
+[ -S /tmp/.X11-unix/X1 ] && echo "  Xvfb OK" || { echo "  !! Xvfb failed"; cat /tmp/xvfb.log | tail -5; }
 
-# --- desktop (XFCE) on :1 ---
+# --- XFCE desktop on :1 (with dbus) ---
 echo "[*] starting XFCE desktop"
-export DISPLAY=:1
-if command -v startxfce4 >/dev/null 2>&1; then
-  startxfce4 &>/tmp/xfce.log &
-elif [ -f /etc/xdg/xfce4/xinitrc ] || [ -f /etc/X11/xinit/xinitrc ]; then
-  xfce4-session &>/tmp/xfce.log &
+if command -v dbus-run-session >/dev/null 2>&1; then
+  dbus-run-session -- startxfce4 &>/tmp/xfce.log &
 else
-  echo "  !! no XFCE found - will install"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -yq >/dev/null 2>&1 || true
-  apt-get install -yq --no-install-recommends xfce4 xfce4-terminal xfce4-session >/dev/null 2>&1 || true
   startxfce4 &>/tmp/xfce.log &
 fi
-sleep 6
-
-# --- install x11vnc if missing ---
-if ! command -v x11vnc >/dev/null 2>&1; then
-  echo "[*] installing x11vnc"
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -yq >/dev/null 2>&1 || true
-  apt-get install -yq x11vnc >/dev/null 2>&1 || apt-get install -yq --no-install-recommends x11vnc >/dev/null 2>&1 || true
-fi
+sleep 8
 
 # --- x11vnc NO PASSWORD on :1, port 5901 ---
 echo "[*] starting x11vnc (no password) on $DISPLAY :5901"
@@ -81,25 +86,16 @@ echo "[*] noVNC web dir: ${NOVNC:-/usr/share/novnc}"
 
 # --- websockify: noVNC page + proxy websocket to :5901 ---
 echo "[*] starting websockify on :6080 -> localhost:5901"
-if command -v websockify >/dev/null 2>&1; then
-  websockify --web="${NOVNC:-/usr/share/novnc}" 6080 localhost:5901 &>/tmp/ws.log &
-elif python3 -c "import websockify" 2>/dev/null; then
-  python3 -m websockify --web="${NOVNC:-/usr/share/novnc}" 6080 localhost:5901 &>/tmp/ws.log &
-else
-  echo "[*] installing novnc websockify"
-  apt-get update -yq >/dev/null 2>&1 || true
-  apt-get install -yq novnc websockify >/dev/null 2>&1 || true
-  websockify --web="${NOVNC:-/usr/share/novnc}" 6080 localhost:5901 &>/tmp/ws.log &
-fi
+websockify --web="${NOVNC:-/usr/share/novnc}" 6080 localhost:5901 &>/tmp/ws.log &
 sleep 4
 
-# --- VERIFY both ports before tunneling ---
+# --- VERIFY BOTH PORTS before tunneling ---
 echo "[*] service check:"
 PORTS=$( (ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null) | grep -E ':(5901|6080)' || true)
 echo "$PORTS"
 if ! echo "$PORTS" | grep -q ':5901'; then
   echo "[!] VNC port 5901 is NOT listening - aborting tunnel"
-  send_telegram "VNC setup FAILED - port 5901 not listening. Check the action log."
+  send_telegram "VNC setup FAILED - port 5901 not listening. Check action log."
   exit 1
 fi
 curl -s -o /dev/null -w "  vnc.html HTTP %{http_code}\n" http://127.0.0.1:6080/vnc.html || true
