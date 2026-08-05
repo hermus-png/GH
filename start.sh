@@ -1,11 +1,11 @@
 #!/bin/bash
-# Kali Web environment for GitHub Actions runner (Ubuntu).
-# Sets up XFCE desktop + noVNC, then exposes it via a temporary Cloudflare tunnel.
+# Kali Web — wires noVNC + Cloudflare tunnel inside the kali-novnc container.
+# The container image already runs XFCE + VNC(5900) + noVNC(8080 or 6080).
+# We detect the live noVNC port, then open a temporary Cloudflare tunnel to it.
 set -e
 
-echo "[*] Setup start (runner)"
+echo "[*] Kali Web setup (container)"
 
-# --- Optional Telegram notification ---
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 send_telegram() {
@@ -14,61 +14,58 @@ send_telegram() {
     --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
     --data-urlencode "text=$1" >/dev/null 2>&1 || true
 }
-send_telegram "Kali Web starting... tunnel URL will be posted soon."
+send_telegram "Kali Web container starting..."
 
-# --- install packages (Ubuntu) ---
-export DEBIAN_FRONTEND=noninteractive
-echo "[*] apt update"
-sudo apt-get update -yq >/dev/null 2>&1 || sudo apt-get update -yq
-echo "[*] apt install desktop + VNC + noVNC + cloudflared"
-sudo apt-get install -yq --no-install-recommends \
-  xvfb x11vnc xfce4 xfce4-terminal firefox \
-  novnc websockify curl wget net-tools >/dev/null 2>&1 || \
-sudo apt-get install -yq --no-install-recommends \
-  xvfb x11vnc xfce4 xfce4-terminal novnc websockify curl wget net-tools >/dev/null 2>&1
-
-# cloudflared (latest) — GitHub is generally reachable
+# --- cloudflared (tunnel client) ---
 if ! command -v cloudflared >/dev/null 2>&1; then
-  echo "[*] Installing cloudflared"
-  curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-    -o /tmp/cloudflared
-  chmod +x /tmp/cloudflared
-  sudo mv /tmp/cloudflared /usr/local/bin/cloudflared
+  echo "[*] installing cloudflared"
+  curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /tmp/cf
+  chmod +x /tmp/cf
+  mv /tmp/cf /usr/local/bin/cloudflared
 fi
 
-# --- Start X display + desktop ---
-echo "[*] Starting Xvfb"
-export DISPLAY=:99
-rm -f /tmp/.X99-lock
-Xvfb :99 -screen 0 1440x900x24 &
+# --- wait for VNC/noVNC services (image boots them via supervisor) ---
+echo "[*] waiting for VNC :5900"
+for i in $(seq 1 60); do
+  (ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null) | grep -q ':5900' && { echo "VNC up"; break; }
+  sleep 2
+done
 
-sleep 2
-echo "[*] Starting wm + desktop"
-export HOME=/root
-startxfce4 &> /tmp/xfce.log &
+echo "[*] looking for noVNC port (6080 or 8080)"
+NOVNC_PORT=""
+for p in 6080 8080 6901; do
+  if (ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null) | grep -q ":$p"; then
+    NOVNC_PORT=$p
+    echo "noVNC found on :$p"
+    break
+  fi
+done
 
-# --- x11vnc (no password) ---
-echo "[*] Starting x11vnc (no password)"
-x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -o /tmp/x11vnc.log &
+# If no noVNC service is running, start one pointing at VNC 5900
+if [ -z "$NOVNC_PORT" ]; then
+  echo "[*] no noVNC running — starting websockify on 6080"
+  apt-get update -yq >/dev/null 2>&1 || true
+  apt-get install -yq novnc websockify >/dev/null 2>&1 || true
+  # If websockify isn't available, use the noVNC python module
+  if command -v websockify >/dev/null 2>&1; then
+    websockify --web=/usr/share/novnc/ 6080 localhost:5900 &>/tmp/novnc.log &
+  else
+    python3 -m websockify --web=/usr/share/novnc/ 6080 localhost:5900 &>/tmp/novnc.log &
+  fi
+  NOVNC_PORT=6080
+  sleep 3
+fi
 
-# --- noVNC on 6080 ---
-sleep 2
-echo "[*] Starting noVNC websockify on 6080"
-websockify --web=/usr/share/novnc/ 6080 localhost:5900 &
-sleep 2
-
-echo "[*] Starting Cloudflare quick tunnel -> http://127.0.0.1:6080"
-# Run tunnel in background; capture URL from stderr
-cloudflared tunnel --url http://127.0.0.1:6080 --no-autoupdate \
-  > /tmp/cf.log 2>&1 &
-
-# Wait for the .trycloudflare.com URL to appear, then print + notify
-for i in $(seq 1 120); do
+# --- Cloudflare quick tunnel to the noVNC port ---
+echo "[*] starting Cloudflare tunnel -> :$NOVNC_PORT"
+cloudflared tunnel --url "http://127.0.0.1:$NOVNC_PORT" --no-autoupdate &>/tmp/cf.log &
+for i in $(seq 1 90); do
   URL=$(grep -oE "https://[a-z0-9.-]+\.trycloudflare\.com" /tmp/cf.log 2>/dev/null | head -1)
   if [ -n "$URL" ]; then
-    echo "############################################"
-    echo "####  VNC URL: ${URL}/vnc.html  ####"
-    echo "############################################"
+    echo "############ KALI IS UP ############"
+    echo "##  VNC: ${URL}/vnc.html"
+    echo "##  No password required"
+    echo "####################################"
     send_telegram "Kali is UP (no password)
 VNC: ${URL}/vnc.html"
     break
@@ -76,6 +73,5 @@ VNC: ${URL}/vnc.html"
   sleep 2
 done
 
-echo "[*] Keep-alive. Ctrl-C / stop the run to end."
-# Keep the runner alive while tunnel is up
+echo "[*] keep-alive (stop the run to end)"
 wait

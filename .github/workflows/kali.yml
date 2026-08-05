@@ -8,12 +8,15 @@ on:
 jobs:
   kali-web:
     runs-on: ubuntu-latest
+    container:
+      image: pushpenderindia/kali-linux-novnc
+      options: --user root
     timeout-minutes: 300
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run Kali web env
+      - name: Run Kali web env (noVNC + tunnel)
         run: |
           chmod +x ./start.sh
           ./start.sh
