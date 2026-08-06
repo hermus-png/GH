@@ -1,0 +1,41 @@
+name: Port 3000 Test + Cloudflare Tunnel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-port:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y python3 curl wget net-tools
+
+
+    - name: Install Cloudflared
+      run: |
+        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+        sudo dpkg -i cloudflared-linux-amd64.deb
+
+
+    - name: Start Simple Server on Port 3000
+      run: |
+        nohup python3 -m http.server 3000 > server.log 2>&1 &
+        sleep 3
+
+
+    - name: Check Port 3000 Status
+      run: |
+        echo "=== PORT STATUS ==="
+        netstat -tuln | grep 3000
+        echo "=== LOCAL RESPONSE ==="
+        curl -I http://localhost:3000
+
+
+    - name: Start Cloudflare Quick Tunnel
+      run: |
+        cloudflared tunnel --url http://localhost:3000
