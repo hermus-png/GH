@@ -53,10 +53,6 @@ jobs:
         sleep 10
 
 
-    - name: Start Cloudflare Tunnel
-      env:
-        CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-
+    - name: Start Cloudflare Quick Tunnel
       run: |
-        cloudflared tunnel run \
-        --token $CLOUDFLARE_TUNNEL_TOKEN
+        cloudflared tunnel --url http://localhost:3000
