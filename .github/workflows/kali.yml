@@ -1,25 +1,62 @@
-name: Kali Web (noVNC + Cloudflare Tunnel)
+name: Hermes Agent + Cloudflare Tunnel
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 jobs:
-  kali-web:
+  hermes:
     runs-on: ubuntu-latest
-    container:
-      image: pushpenderindia/kali-linux-novnc
-      options: --user root
-    timeout-minutes: 300
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    timeout-minutes: 360
 
-      - name: Run Kali web env (noVNC + tunnel)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          chmod +x ./start.sh
-          ./start.sh
+    steps:
+
+    - name: Update system
+      run: |
+        sudo apt update
+        sudo apt upgrade -y
+
+
+    - name: Install dependencies
+      run: |
+        sudo apt install -y \
+        python3 \
+        python3-pip \
+        git \
+        curl \
+        wget
+
+
+    - name: Install Cloudflared
+      run: |
+        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+        sudo dpkg -i cloudflared-linux-amd64.deb
+
+
+    - name: Install Hermes Agent
+      run: |
+        curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+
+
+    - name: Setup Hermes
+      run: |
+        echo "Hermes installed"
+        hermes --version || true
+
+
+    - name: Start Hermes Server
+      run: |
+        nohup hermes serve \
+        --host 0.0.0.0 \
+        --port 3000 \
+        > hermes.log 2>&1 &
+
+        sleep 10
+
+
+    - name: Start Cloudflare Tunnel
+      env:
+        CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+
+      run: |
+        cloudflared tunnel run \
+        --token $CLOUDFLARE_TUNNEL_TOKEN
